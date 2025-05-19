@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	BUFFERSIZE     = 8192
+	BUFFERSIZE = 8192
+	// DELAY should optimally be: track_duration * buffer_size / mp3_file_size
 	DELAY          = 150
 	MUSIC_DIR      = "music/"
 	FILE_EXTENSION = ".mp3"
@@ -96,17 +97,30 @@ func FetchSongTitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entries, err := os.ReadDir(MUSIC_DIR)
+	if err != nil {
+		log.Println("error: " + err.Error() + " in FetchSongTitles")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var directorySongs []musicModels.Song
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), FILE_EXTENSION) {
+			entryNameWithoutSuffix := strings.TrimSuffix(entry.Name(), FILE_EXTENSION)
+			directorySongs = append(directorySongs, musicModels.Song{Title: entryNameWithoutSuffix})
+		}
+	}
+
 	songs := musicModels.Songs{
-		Songs: []musicModels.Song{
-			{Title: "194 Länder"},
-			{Title: "Alles nur geklaut"},
-			{Title: "APT"},
-			{Title: "Guck mal diese Biene da"},
-			{Title: "What About Us"},
-			{Title: "Wildberry Lillet"},
-		},
+		Songs: directorySongs,
 	}
 
 	log.Println("successfully fetched song titles")
-	json.NewEncoder(w).Encode(songs)
+	err = json.NewEncoder(w).Encode(songs)
+	if err != nil {
+		log.Println("error: " + err.Error() + " in encoding JSON")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
