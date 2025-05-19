@@ -1,7 +1,6 @@
 package music
 
 import (
-	"bytes"
 	"encoding/json"
 	"homeApplications/middleware"
 	musicModels "homeApplications/music/models"
@@ -50,18 +49,12 @@ func StreamMusic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Println("Error closing file:", err)
+		}
+	}()
 
-	ctn, err := io.ReadAll(file)
-	if err != nil {
-		log.Println(err)
-		http.Error(w, "Invalid", http.StatusBadRequest)
-		return
-	}
-	buffer := make([]byte, BUFFERSIZE)
-
-	tempfile := bytes.NewReader(ctn)
-	ticker := time.NewTicker(time.Millisecond * DELAY)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		log.Println("Could not create flusher")
@@ -70,18 +63,26 @@ func StreamMusic(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Add("Content-Type", "audio/mpeg")
 	w.Header().Add("Connection", "keep-alive")
+
+	buffer := make([]byte, BUFFERSIZE)
+	ticker := time.NewTicker(time.Millisecond * DELAY)
+	defer ticker.Stop()
 	for range ticker.C {
-		_, err := tempfile.Read(buffer)
+		n, err := file.Read(buffer)
+		if n > 0 {
+			if _, err := w.Write(buffer[:n]); err != nil {
+				log.Printf("%s's connection to the audio stream has been closed\n", r.Host)
+				return
+			}
+			flusher.Flush()
+		}
 		if err == io.EOF {
-			ticker.Stop()
 			break
 		}
-		if _, err := w.Write(buffer); err != nil {
-			log.Printf("%s's connection to the audio stream has been closed\n", r.Host)
-			return
+		if err != nil {
+			log.Println("Error reading file:", err)
+			break
 		}
-		flusher.Flush()
-		clear(buffer)
 	}
 
 }
