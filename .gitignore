@@ -4,6 +4,7 @@
 *.so
 *.dylib
 homeApplications
+*.mp3
 
 # Test binary, build output
 *.test

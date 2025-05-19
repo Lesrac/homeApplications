@@ -11,6 +11,7 @@ import (
 	"homeApplications/health"
 	"homeApplications/middleware"
 	"homeApplications/models"
+	"homeApplications/music"
 	"homeApplications/pocketMoney"
 	"io"
 	"log"
@@ -60,6 +61,8 @@ func main() {
 	mux.HandleFunc("/pocketMoney/addAction", pocketMoney.CreateAction)
 	mux.HandleFunc("/pocketMoney/acknowledgeAction", pocketMoney.AcknowledgeAction)
 	mux.HandleFunc("/pocketMoney/", pocketMoney.GetActions)
+	mux.HandleFunc("/audio/", music.StreamMusic)
+	mux.HandleFunc("/songs/", music.FetchSongTitles)
 	log.Println("Server is starting on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", middleware.CorsMiddleware(middleware.JSONMiddleware(mux))))
 }
