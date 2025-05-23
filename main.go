@@ -76,6 +76,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	appUser.Password = ""
+	log.Println("user '" + appUser.Name + "' logged in")
 	json.NewEncoder(w).Encode(appUser)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"homeApplications/middleware"
@@ -66,6 +67,7 @@ func AcknowledgeAction(w http.ResponseWriter, r *http.Request) {
 	middleware.EnableCors(&w)
 	user, err := middleware.CheckAuthorization(r, models.User)
 	if err != nil {
+		log.Println(err.Error())
 		middleware.HandleError(w, err)
 		return
 	}
@@ -78,23 +80,26 @@ func AcknowledgeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("action acknowledged:", req)
+	requestID := uuid.New().String()
+	log.Println(requestID, "user", user.Name, "acknowledge action:", req)
 
 	switch req.Action {
 	case pocketMoneyModels.Confirm:
-		_, err = dbPool.Query(context.Background(), "UPDATE pocket_money SET confirmed = TRUE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
+		_, err = dbPool.Exec(context.Background(), "UPDATE pocket_money SET confirmed = TRUE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
 	//	actions = append(actions, models.Action{UserID: req.EntryID, Action: string(pocketMoneyModels.Confirm), Timestamp: req.Date})
 	case pocketMoneyModels.Refute:
-		_, err = dbPool.Query(context.Background(), "UPDATE pocket_money SET confirmed = FALSE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
+		_, err = dbPool.Exec(context.Background(), "UPDATE pocket_money SET confirmed = FALSE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
 	default:
+		log.Println(requestID, "Invalid action")
 		http.Error(w, "Invalid action", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		log.Println(err.Error())
+		log.Println(requestID, err.Error())
 		http.Error(w, "DB error", http.StatusBadRequest)
 		return
 	}
+	log.Println(requestID, "END")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
