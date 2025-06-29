@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"homeApplications/models"
 	"homeApplications/music"
 	"homeApplications/pocketMoney"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -120,10 +118,8 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req models.AppUser
-	body, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(body))
 	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Println("error: " + err.Error() + " in ChangePassword. " + string(body))
+		log.Println("error: " + err.Error() + " in ChangePassword. " + user.Name)
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
@@ -149,7 +145,6 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func AddUser(w http.ResponseWriter, r *http.Request) {
-	println("add user")
 	// Implementation for recording actions
 	_, err := middleware.CheckAuthorization(r, models.Admin)
 	if err != nil {
@@ -158,14 +153,13 @@ func AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req models.AppUser
-	body, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(body))
 	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
 		// Potential password leak
-		log.Println("error: " + err.Error() + " in AddUser. " + string(body))
+		log.Println("error: " + err.Error() + " in AddUser.")
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("Add user '%s'\n", req.Name)
 	hashedPassword, err := middleware.HashPassword(req.Password)
 	if err != nil {
 		log.Println("Failed to hash password: " + err.Error())
