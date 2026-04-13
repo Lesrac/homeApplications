@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"homeApplications/health"
 	"homeApplications/middleware"
 	"homeApplications/models"
@@ -16,6 +14,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var dbPool *pgxpool.Pool
@@ -32,21 +36,32 @@ func main() {
 	}
 	// urlExample := "postgres://homeApp:S3cret@localhost:5432/homeapp_db"
 	// should be: os.Getenv("DATABASE_URL")
+	// Create a cancellable context for lifecycle management
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Connect to DB with retries (will keep retrying until context canceled)
 	var err error
-	dbPool, err = pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	dbPool, err = connectWithRetry(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatal(fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err))
 	}
 	defer dbPool.Close()
 
+	// Start a background DB monitor that keeps an in-memory readiness flag updated.
+	middleware.SetDBReady(true)
+	go monitorDB(ctx, dbPool)
+
 	middleware.SetDBConnection(dbPool)
 	pocketMoney.SetDBConnection(dbPool)
 
 	mux := http.NewServeMux()
+	// Unprotected health endpoint (reports DB readiness separately)
 	mux.HandleFunc("/health", health.HealthCheck)
-	mux.HandleFunc("/login", Login)
-	mux.HandleFunc("/users", GetUsers)
-	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+	// Wrap DB-backed routes with RequireDB so clients receive 503 while DB is down
+	mux.Handle("/login", middleware.RequireDB(http.HandlerFunc(Login)))
+	mux.Handle("/users", middleware.RequireDB(http.HandlerFunc(GetUsers)))
+	mux.Handle("/user", middleware.RequireDB(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			AddUser(w, r)
@@ -55,14 +70,115 @@ func main() {
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/pocketMoney/addAction", pocketMoney.CreateAction)
-	mux.HandleFunc("/pocketMoney/acknowledgeAction", pocketMoney.AcknowledgeAction)
-	mux.HandleFunc("/pocketMoney/", pocketMoney.GetActions)
+	})))
+	mux.Handle("/pocketMoney/addAction", middleware.RequireDB(http.HandlerFunc(pocketMoney.CreateAction)))
+	mux.Handle("/pocketMoney/acknowledgeAction", middleware.RequireDB(http.HandlerFunc(pocketMoney.AcknowledgeAction)))
+	mux.Handle("/pocketMoney/", middleware.RequireDB(http.HandlerFunc(pocketMoney.GetActions)))
+	// Audio streaming is file-based and does not require DB
 	mux.HandleFunc("/audio/", music.StreamMusic)
-	mux.HandleFunc("/songs/", music.FetchSongTitles)
-	log.Println("Server is starting on port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", middleware.CorsMiddleware(middleware.JSONMiddleware(mux))))
+	mux.Handle("/songs/", middleware.RequireDB(http.HandlerFunc(music.FetchSongTitles)))
+	srv := &http.Server{Addr: ":8080", Handler: middleware.CorsMiddleware(middleware.JSONMiddleware(mux))}
+
+	// Start server
+	go func() {
+		log.Println("Server is starting on port 8080...")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("ListenAndServe(): %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutdown signal received, shutting down server...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server Shutdown Failed: %v", err)
+	}
+
+	// Cancel background tasks and close DB pool (deferred above will run)
+	cancel()
+}
+
+// connectWithRetry attempts to create a pgxpool.Pool, retrying with exponential backoff until success
+func connectWithRetry(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	backoff := 500 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		pool, err := pgxpool.New(ctx, dsn)
+		if err == nil {
+			// quick health check
+			if err = pingDB(ctx, pool); err == nil {
+				log.Printf("Connected to DB on attempt %d", attempt+1)
+				return pool, nil
+			}
+			pool.Close()
+		}
+
+		log.Printf("DB connect attempt %d failed: %v. Retrying in %s...", attempt+1, err, backoff)
+		select {
+		case <-time.After(backoff):
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			continue
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// pingDB performs a lightweight query to verify connectivity
+func pingDB(ctx context.Context, pool *pgxpool.Pool) error {
+	if pool == nil {
+		return fmt.Errorf("nil pool")
+	}
+	// Use Exec with a short timeout taken from ctx
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := pool.Exec(cctx, "SELECT 1")
+	return err
+}
+
+// monitorDB periodically checks DB connectivity and updates the in-memory readiness flag.
+// It intentionally avoids noisy logging; it simply sets the flag so middleware and health can react.
+func monitorDB(ctx context.Context, pool *pgxpool.Pool) {
+	interval := 10 * time.Second
+	if v := os.Getenv("DB_MONITOR_INTERVAL_SECONDS"); v != "" {
+		if secs, err := time.ParseDuration(v + "s"); err == nil {
+			interval = secs
+		}
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	wasUp := true
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := pingDB(ctx, pool); err != nil {
+				if wasUp {
+					wasUp = false
+					middleware.SetDBReady(false)
+				}
+			} else {
+				if !wasUp {
+					wasUp = true
+					middleware.SetDBReady(true)
+				}
+			}
+		}
+	}
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +202,7 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Implementation for fetching users
-	rows, err := dbPool.Query(context.Background(), "SELECT id, name, access_level FROM users")
+	rows, err := dbPool.Query(r.Context(), "SELECT id, name, access_level FROM users")
 	if err != nil {
 		log.Println("Failed to execute query: " + err.Error())
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -136,7 +252,7 @@ func ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = dbPool.Exec(context.Background(), "UPDATE users SET password=$1 WHERE id=$2", hashedPassword, user.ID)
+	_, err = dbPool.Exec(r.Context(), "UPDATE users SET password=$1 WHERE id=$2", hashedPassword, user.ID)
 	if err != nil {
 		log.Println("Failed to execute query: " + err.Error())
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -167,12 +283,11 @@ func AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = dbPool.Exec(context.Background(), "INSERT INTO users (name, access_level, password) VALUES ($1, $2, $3)", req.Name, req.Access, hashedPassword)
+	_, err = dbPool.Exec(r.Context(), "INSERT INTO users (name, access_level, password) VALUES ($1, $2, $3)", req.Name, req.Access, hashedPassword)
 	if err != nil {
-		var pgErr *pgconn.PgError
 		var errMsg string
 		var errCode int
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // 23505 is the PostgreSQL error code for unique constraint violation
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" { // 23505 is the PostgreSQL error code for unique constraint violation
 			errMsg = "User already exists"
 			errCode = http.StatusConflict
 		} else {

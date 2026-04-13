@@ -1,7 +1,6 @@
 package pocketMoney
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -40,7 +39,7 @@ func CreateAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newID int
-	err = dbPool.QueryRow(context.Background(), "INSERT INTO pocket_money (receiver_user_id, amount, specific_date) VALUES ($1, $2, $3) RETURNING id",
+	err = dbPool.QueryRow(r.Context(), "INSERT INTO pocket_money (receiver_user_id, amount, specific_date) VALUES ($1, $2, $3) RETURNING id",
 		req.UserID, req.Amount, req.Date.Format("2006-01-02")).Scan(&newID)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -82,10 +81,10 @@ func AcknowledgeAction(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Action {
 	case pocketMoneyModels.Confirm:
-		_, err = dbPool.Exec(context.Background(), "UPDATE pocket_money SET confirmed = TRUE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
+		_, err = dbPool.Exec(r.Context(), "UPDATE pocket_money SET confirmed = TRUE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
 	//	actions = append(actions, models.Action{UserID: req.EntryID, Action: string(pocketMoneyModels.Confirm), Timestamp: req.Date})
 	case pocketMoneyModels.Refute:
-		_, err = dbPool.Exec(context.Background(), "UPDATE pocket_money SET confirmed = FALSE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
+		_, err = dbPool.Exec(r.Context(), "UPDATE pocket_money SET confirmed = FALSE WHERE receiver_user_id=$1 AND id =$2", user.ID, req.EntryID)
 	default:
 		http.Error(w, "Invalid action", http.StatusBadRequest)
 		return
@@ -122,7 +121,7 @@ func GetActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT * FROM pocket_money WHERE receiver_user_id=$1", userID)
+	rows, err := dbPool.Query(r.Context(), "SELECT * FROM pocket_money WHERE receiver_user_id=$1", userID)
 	if err != nil {
 		log.Println("Failed to execute query: " + err.Error())
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

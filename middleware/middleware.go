@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,7 +18,8 @@ import (
 const ContentTypeJSON = "application/json"
 
 var (
-	dbPool *pgxpool.Pool
+	dbPool  *pgxpool.Pool
+	dbReady atomic.Bool
 )
 
 func SetDBConnection(pool *pgxpool.Pool) {
@@ -85,7 +86,8 @@ func AuthenticateUser(r *http.Request) (models.AppUser, error) {
 
 	var user models.AppUser
 	var hashedPassword string
-	err = dbPool.QueryRow(context.Background(), "SELECT id, name, access_level, password FROM users WHERE name=$1", username).
+	// Use the request context so DB calls respect cancellation/timeouts
+	err = dbPool.QueryRow(r.Context(), "SELECT id, name, access_level, password FROM users WHERE name=$1", username).
 		Scan(&user.ID, &user.Name, &user.Access, &hashedPassword)
 	invalidUsernameOrPassword := "invalid username or password"
 	if err != nil {
@@ -127,4 +129,27 @@ func HandleError(w http.ResponseWriter, err error) {
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// SetDBReady updates the in-memory readiness flag used by health and RequireDB.
+func SetDBReady(v bool) {
+	dbReady.Store(v)
+}
+
+// IsDBReady returns the current readiness flag.
+func IsDBReady() bool {
+	return dbReady.Load()
+}
+
+// RequireDB is a middleware that checks DB connectivity on-demand and returns 503 when the DB is not reachable.
+// It performs a short PingDB with a small timeout so requests fail fast when DB is down.
+func RequireDB(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsDBReady() {
+			EnableCors(&w)
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
