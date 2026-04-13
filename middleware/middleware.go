@@ -5,13 +5,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 	"homeApplications/models"
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const ContentTypeJSON = "application/json"
@@ -106,12 +107,12 @@ func CheckAuthorization(r *http.Request, requiredAccess models.AccessLevel) (*mo
 	user, err := AuthenticateUser(r)
 	if err != nil {
 		log.Println("error: " + err.Error() + " in CheckAuthorization")
-		return nil, fmt.Errorf("unauthorized: %w", err)
+		return nil, errors.New("unauthorized")
 	}
 
 	if user.Access != requiredAccess {
 		log.Println(fmt.Sprintf("user '%s' with access level '%s' is not authorized for this action", user.Name, user.Access))
-		return nil, fmt.Errorf("forbidden: user does not have the required access level")
+		return nil, errors.New("forbidden")
 	}
 
 	return &user, nil
