@@ -50,6 +50,9 @@ func (d *DateOnly) UnmarshalJSON(b []byte) error {
 
 	// Try full timestamp layout first, then fall back to date-only layout
 	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.000Z07:00",
+		time.RFC3339,
 		"2006-01-02T15:04:05.000",
 		"2006-01-02",
 	}

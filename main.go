@@ -275,7 +275,7 @@ func AddUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Add user '%s'\n", req.Name)
+	log.Printf("Add user '%s'\n", req.Name)
 	hashedPassword, err := middleware.HashPassword(req.Password)
 	if err != nil {
 		log.Println("Failed to hash password: " + err.Error())

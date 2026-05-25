@@ -7,3 +7,11 @@ services:
       - POSTGRES_PASSWORD=S3cret
       - POSTGRES_USER=homeApp
       - POSTGRES_DB=homeapp_db
+
+  flyway:
+    image: flyway/flyway:12-alpine
+    depends_on:
+      - postgres
+    command: -url=jdbc:postgresql://postgres:5432/homeapp_db -schemas=homeapp_db -user=homeApp -password=S3cret -connectRetries=60 migrate
+    volumes:
+      - ../sql/migrations:/flyway/sql

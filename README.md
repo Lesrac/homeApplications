@@ -1,10 +1,11 @@
 # Pre-requisites
-To run locally (for testing) install flyway-cli.
+To run locally (for testing) run docker compose.
 
 # How To build
 ```
 go build
 ```
+run the built "homeApplications" file corresponding to your OS.
 
 ## Create binary for server
 Check available distributions:
