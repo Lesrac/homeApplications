@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17.9-alpine3.23
+    image: postgres:17.11-alpine3.24
     ports:
       - 5432:5432
     environment:
@@ -9,7 +9,7 @@ services:
       - POSTGRES_DB=homeapp_db
 
   flyway:
-    image: flyway/flyway:12-alpine
+    image: flyway/flyway:13.5.0-alpine
     depends_on:
       - postgres
     command: -url=jdbc:postgresql://postgres:5432/homeapp_db -schemas=homeapp_db -user=homeApp -password=S3cret -connectRetries=60 migrate
